@@ -18,7 +18,7 @@ body{
   color:var(--text);
 }
 
-main{ max-width: 900px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
+main{ max-width: 960px; margin:0 auto; display:flex; flex-direction:column; gap:16px; }
 header h1{ margin:0; }
 header .sub{ margin-top:6px; color:var(--muted); }
 
@@ -31,10 +31,50 @@ header .sub{ margin-top:6px; color:var(--muted); }
 
 .row{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
 .row.btns{ margin-top:10px; }
-.row.stats{ margin-top:10px; color:var(--muted); }
 .row.head{ justify-content:space-between; align-items:center; }
 
 .chk{ color:var(--muted); display:flex; gap:8px; align-items:center; }
+
+/* file input */
+.file-label{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 14px;
+  border-radius:10px;
+  border:1px solid var(--line);
+  background:transparent;
+  color:var(--text);
+  cursor:pointer;
+}
+.file-label:hover{ border-color:var(--blue); }
+.file-label input[type="file"]{ display:none; }
+
+/* selected file list (pre-upload) */
+.file-list{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  margin-top:10px;
+}
+.file-list:empty{ display:none; }
+.file-chip{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:6px 10px;
+  border-radius:8px;
+  border:1px solid var(--line);
+  background:#050b18;
+  font-size:13px;
+  color:var(--muted);
+}
+.file-chip .fname{
+  flex:1;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
 
 button{
   padding:10px 14px;
@@ -54,94 +94,106 @@ button.del{
   background:transparent;
   border:1px solid rgba(239,68,68,0.35);
   color:var(--red);
+  padding:6px 10px;
+  font-size:13px;
 }
 button.rerun{
   background:transparent;
   border:1px solid rgba(96,165,250,0.35);
   color:#60a5fa;
+  padding:6px 10px;
+  font-size:13px;
 }
 
-.filename{
-  width:100%;
-  color:var(--muted);
-  white-space:nowrap;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  min-height: 18px;
-}
-
-.progress{
-  height:10px;
-  background:#0a1b35;
-  border:1px solid var(--line);
-  border-radius:999px;
-  overflow:hidden;
-  margin:12px 0;
-}
-#bar{
-  height:100%;
-  width:0%;
-  background:var(--green);
-  transition: width 0.15s linear;
-}
-
-pre{
-  margin:0;
-  height: 260px;
-  overflow:auto;
-  white-space:pre-wrap;
-  padding:12px;
-  border-radius:12px;
-  border:1px solid var(--line);
-  background:#050b18;
-  line-height:1.45;
-}
-
-.downloads a{
-  color:#60a5fa;
-  text-decoration:none;
-  margin-right:14px;
-}
-
-.history{
+/* job list used in both active & history */
+.job-list{
   display:flex;
   flex-direction:column;
   gap:10px;
   margin-top:10px;
 }
 
-.item{
-  display:flex;
-  gap:10px;
-  align-items:center;
-  justify-content:space-between;
+.job-card{
   border:1px solid var(--line);
   border-radius:12px;
-  padding:10px 12px;
+  padding:12px;
   background:#050b18;
 }
-.item .left{
-  min-width:0;
+.job-card .jc-top{
   display:flex;
-  flex-direction:column;
-  gap:4px;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:8px;
 }
-.item .name{
-  white-space:nowrap;
+.job-card .jc-name{
+  flex:1;
+  min-width:0;
   overflow:hidden;
   text-overflow:ellipsis;
-  max-width: 560px;
+  white-space:nowrap;
+  font-size:14px;
 }
-.item .meta{
-  color:var(--muted);
-  font-size: 12px;
-  line-height: 1.35;
-}
-.item .right{
+.job-card .jc-actions{
   display:flex;
-  gap:10px;
+  gap:8px;
   align-items:center;
   flex-wrap:wrap;
+  flex-shrink:0;
 }
-.item a{ color:#60a5fa; text-decoration:none; }
+.job-card .jc-meta{
+  margin-top:4px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.4;
+}
+.job-card .jc-stats{
+  margin-top:6px;
+  color:var(--muted);
+  font-size:12px;
+}
+.job-card .progress{
+  height:6px;
+  background:#0a1b35;
+  border:1px solid var(--line);
+  border-radius:999px;
+  overflow:hidden;
+  margin:8px 0 4px;
+}
+.job-card .bar{
+  height:100%;
+  width:0%;
+  background:var(--green);
+  transition: width 0.15s linear;
+}
+.job-card .jc-output{
+  margin-top:8px;
+  max-height:140px;
+  overflow:auto;
+  white-space:pre-wrap;
+  padding:8px 10px;
+  border-radius:8px;
+  border:1px solid var(--line);
+  background:#030810;
+  font-size:12px;
+  line-height:1.45;
+}
 
+/* history action links */
+.job-card a{
+  color:#60a5fa;
+  text-decoration:none;
+  font-size:13px;
+}
+.job-card a.disabled{
+  opacity:0.35;
+  pointer-events:none;
+}
+
+/* batch-select checkbox in history */
+.jc-check{
+  accent-color:var(--blue);
+  width:16px;
+  height:16px;
+  cursor:pointer;
+  flex-shrink:0;
+}

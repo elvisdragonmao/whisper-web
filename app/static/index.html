@@ -15,48 +15,43 @@
 
     <section class="card">
       <div class="row">
-        <input type="file" id="file" />
+        <label class="file-label" id="fileLabel">
+          <input type="file" id="file" multiple />
+          選擇檔案（可多選）
+        </label>
         <label class="chk">
           <input type="checkbox" id="traditional" />
           轉繁體
         </label>
       </div>
 
-      <div class="row">
-        <div class="filename" id="filename" title=""></div>
-      </div>
+      <div id="fileList" class="file-list"></div>
 
       <div class="row btns">
-        <button id="start">開始</button>
-        <button id="pause" disabled>暫停（取消並釋放GPU）</button>
+        <button id="start">開始轉錄</button>
       </div>
+    </section>
 
-      <div class="row stats">
-        <div id="stats">—</div>
+    <!-- Active jobs list -->
+    <section class="card" id="activeSection" hidden>
+      <div class="row head">
+        <h2>進行中</h2>
       </div>
-
-      <div class="progress">
-        <div id="bar"></div>
-      </div>
-
-      <pre id="output"></pre>
-
-      <div class="row downloads" id="downloads" hidden>
-        <a id="txt" download>下載 TXT</a>
-        <a id="srt" download>下載 SRT</a>
-      </div>
+      <div id="activeJobs" class="job-list"></div>
     </section>
 
     <section class="card">
       <div class="row head">
         <h2>歷史</h2>
-        <button class="ghost" id="refresh">重新整理</button>
+        <div class="row" style="gap:8px">
+          <button class="ghost" id="batchDownloadBtn" disabled>批次下載 ZIP</button>
+          <button class="ghost" id="refresh">重新整理</button>
+        </div>
       </div>
-      <div id="history" class="history">載入中…</div>
+      <div id="history" class="job-list">載入中…</div>
     </section>
   </main>
 
   <script src="/static/app.js"></script>
 </body>
 </html>
-

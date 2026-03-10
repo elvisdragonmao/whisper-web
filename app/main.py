@@ -1,15 +1,17 @@
+import io
 import os
 import re
 import json
 import time
 import uuid
+import zipfile
 import asyncio
 import threading
 import subprocess
 from typing import Dict, Any, Optional, List
 
 from fastapi import FastAPI, UploadFile, Form, WebSocket, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 DATA_DIR = "/data"
@@ -144,7 +146,54 @@ def download(job_id: str, ext: str):
     path = f"{OUTPUTS_DIR}/{job_id}.{ext}"
     if not os.path.exists(path):
         raise HTTPException(404, "file not found")
-    return FileResponse(path, filename=f"{job_id}.{ext}")
+    # Use original filename (strip original extension, append target ext)
+    job = get_job(job_id)
+    orig = job.get("filename", job_id) if job else job_id
+    base = os.path.splitext(orig)[0]  # strip original ext (e.g. .mp4)
+    dl_name = f"{base}.{ext}"
+    return FileResponse(path, filename=dl_name)
+
+@app.get("/download-batch")
+def download_batch(job_ids: str):
+    """
+    Download multiple completed jobs as a ZIP file.
+    job_ids: comma-separated list of job IDs.
+    """
+    ids = [j.strip() for j in job_ids.split(",") if j.strip()]
+    if not ids:
+        raise HTTPException(400, "no job_ids provided")
+
+    buf = io.BytesIO()
+    seen: Dict[str, int] = {}
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for job_id in ids:
+            job = get_job(job_id)
+            if not job or job.get("status") != "done":
+                continue
+            orig = job.get("filename", job_id)
+            base = os.path.splitext(orig)[0]
+            for ext in ("srt", "txt"):
+                path = f"{OUTPUTS_DIR}/{job_id}.{ext}"
+                if os.path.exists(path):
+                    arc = f"{base}.{ext}"
+                    # Deduplicate: add suffix if name already used
+                    if arc in seen:
+                        seen[arc] += 1
+                        name_part, ext_part = os.path.splitext(arc)
+                        arc = f"{name_part}_{seen[arc]}{ext_part}"
+                    else:
+                        seen[arc] = 0
+                    zf.write(path, arcname=arc)
+
+    if buf.tell() == 0:
+        raise HTTPException(404, "no completed files found")
+
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=transcripts.zip"},
+    )
 
 @app.delete("/job/{job_id}")
 def delete_job(job_id: str):
