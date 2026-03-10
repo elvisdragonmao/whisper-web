@@ -1,240 +1,307 @@
+// ─── helpers ────────────────────────────────────────────────────────────────
 const $ = (id) => document.getElementById(id);
-
-const file = $("file");
-const traditional = $("traditional");
-const startBtn = $("start");
-const pauseBtn = $("pause");
-const filenameEl = $("filename");
-const output = $("output");
-const stats = $("stats");
-const bar = $("bar");
-const downloads = $("downloads");
-const txt = $("txt");
-const srt = $("srt");
-const history = $("history");
-const refreshBtn = $("refresh");
-
-let currentJobId = null;
-let ws = null;
 
 function fmtTime(ts){
   if (!ts) return "—";
-  const d = new Date(ts * 1000);
-  return d.toLocaleString();
+  return new Date(ts * 1000).toLocaleString();
 }
-
 function fmtSec(s){
   if (s === null || s === undefined || !isFinite(s)) return "—";
   return `${Number(s).toFixed(1)}s`;
 }
 
-function connectWS(jobId){
+// ─── DOM refs ────────────────────────────────────────────────────────────────
+const fileInput       = $("file");
+const fileListEl      = $("fileList");
+const traditionalChk  = $("traditional");
+const startBtn        = $("start");
+const activeSection   = $("activeSection");
+const activeJobsEl    = $("activeJobs");
+const historyEl       = $("history");
+const refreshBtn      = $("refresh");
+const batchDownloadBtn= $("batchDownloadBtn");
+
+// ─── state ───────────────────────────────────────────────────────────────────
+// Map<job_id, { ws, card elements }>
+const activeJobs = new Map();
+
+// ─── file picker display ─────────────────────────────────────────────────────
+fileInput.addEventListener("change", () => {
+  fileListEl.innerHTML = "";
+  for (const f of fileInput.files) {
+    const chip = document.createElement("div");
+    chip.className = "file-chip";
+    chip.innerHTML = `<span class="fname">${f.name}</span><span>${(f.size/1024/1024).toFixed(1)} MB</span>`;
+    fileListEl.appendChild(chip);
+  }
+});
+
+// ─── start (batch upload) ────────────────────────────────────────────────────
+startBtn.addEventListener("click", async () => {
+  const files = Array.from(fileInput.files);
+  if (!files.length) return alert("請選擇至少一個檔案");
+
+  startBtn.disabled = true;
+
+  // Upload all files concurrently; each gets its own job card immediately
+  await Promise.all(files.map(f => uploadFile(f, traditionalChk.checked)));
+
+  // Clear picker
+  fileInput.value = "";
+  fileListEl.innerHTML = "";
+  startBtn.disabled = false;
+});
+
+async function uploadFile(file, traditional) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("traditional", traditional);
+
+  // Optimistically create a card in "uploading…" state
+  const tempId = "tmp-" + Math.random().toString(36).slice(2);
+  const card = createActiveCard(tempId, file.name, "上傳中…");
+
+  let job_id;
+  try {
+    const res = await fetch("/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    job_id = data.job_id;
+  } catch (e) {
+    card.setStatus("上傳失敗: " + e.message, true);
+    return;
+  }
+
+  // Replace tempId with real job_id
+  card.setJobId(job_id);
+  activeJobs.delete(tempId);
+  activeJobs.set(job_id, card);
+
+  connectWS(job_id, card);
+}
+
+// ─── active job card factory ─────────────────────────────────────────────────
+function createActiveCard(jobId, filename, initialStatus) {
+  activeSection.hidden = false;
+
+  const wrap = document.createElement("div");
+  wrap.className = "job-card";
+  wrap.dataset.jobId = jobId;
+
+  wrap.innerHTML = `
+    <div class="jc-top">
+      <div class="jc-name" title="${filename}">${filename}</div>
+      <div class="jc-actions">
+        <button class="pause-btn ghost">暫停</button>
+      </div>
+    </div>
+    <div class="jc-stats">${initialStatus}</div>
+    <div class="progress"><div class="bar"></div></div>
+    <div class="jc-output"></div>
+  `;
+
+  const bar     = wrap.querySelector(".bar");
+  const statsEl = wrap.querySelector(".jc-stats");
+  const outputEl= wrap.querySelector(".jc-output");
+  const pauseBtn= wrap.querySelector(".pause-btn");
+
+  pauseBtn.addEventListener("click", async () => {
+    pauseBtn.disabled = true;
+    statsEl.textContent = "取消中…";
+    const id = wrap.dataset.jobId;
+    await fetch(`/job/${id}/pause`, { method: "POST" });
+  });
+
+  activeJobsEl.prepend(wrap);
+  activeJobs.set(jobId, { wrap, bar, statsEl, outputEl, pauseBtn });
+
+  return {
+    setJobId(newId) {
+      wrap.dataset.jobId = newId;
+    },
+    setStatus(msg, isError = false) {
+      statsEl.textContent = msg;
+      if (isError) statsEl.style.color = "var(--red)";
+    },
+  };
+}
+
+// ─── WebSocket per job ────────────────────────────────────────────────────────
+function connectWS(jobId, _card) {
+  const state = activeJobs.get(jobId);
+  if (!state) return;
+
+  const { wrap, bar, statsEl, outputEl, pauseBtn } = state;
+
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  ws = new WebSocket(`${proto}://${location.host}/ws/${jobId}`);
+  const ws = new WebSocket(`${proto}://${location.host}/ws/${jobId}`);
+  state.ws = ws;
 
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
 
-    if (msg.type === "segment"){
-      output.textContent += msg.text + "\n"; // TXT 每段換行
-      output.scrollTop = output.scrollHeight;
+    if (msg.type === "segment") {
+      outputEl.textContent += msg.text + "\n";
+      outputEl.scrollTop = outputEl.scrollHeight;
 
       const percent = msg.percent ?? (msg.audio_total ? (msg.processed_audio / msg.audio_total * 100) : 0);
-      const speed = msg.speed ?? (msg.wall_elapsed ? (msg.processed_audio / msg.wall_elapsed) : 0);
+      const speed   = msg.speed   ?? (msg.wall_elapsed ? (msg.processed_audio / msg.wall_elapsed) : 0);
 
       bar.style.width = Math.min(percent, 100).toFixed(1) + "%";
-
-      stats.textContent =
-        `已跑音訊 ${fmtSec(msg.processed_audio)} / ${fmtSec(msg.audio_total)} `
+      statsEl.textContent =
+        `已跑 ${fmtSec(msg.processed_audio)} / ${fmtSec(msg.audio_total)} `
         + `• ${Number(percent).toFixed(1)}% `
-        + `• 已用時間 ${fmtSec(msg.wall_elapsed)} `
-        + `• 速度 x${Number(speed).toFixed(2)}`;
+        + `• ${fmtSec(msg.wall_elapsed)} `
+        + `• x${Number(speed).toFixed(2)}`;
     }
 
-    if (msg.type === "paused"){
-      stats.textContent = "已暫停（任務取消、GPU已釋放）";
-      startBtn.disabled = false;
-      pauseBtn.disabled = true;
-      downloads.hidden = true;
-      cleanupWS();
-      loadHistory();
+    if (msg.type === "paused") {
+      statsEl.textContent = "已暫停";
+      finishCard(jobId, false);
     }
 
-    if (msg.type === "done"){
+    if (msg.type === "done") {
       bar.style.width = "100%";
-      downloads.hidden = false;
-      stats.textContent += " • 完成 ✅";
-      startBtn.disabled = false;
-      pauseBtn.disabled = true;
-      cleanupWS();
-      loadHistory();
+      statsEl.textContent = statsEl.textContent + " • 完成 ✅";
+      finishCard(jobId, true);
     }
 
-    if (msg.type === "error"){
-      stats.textContent = "錯誤： " + (msg.message || "unknown");
-      startBtn.disabled = false;
-      pauseBtn.disabled = true;
-      downloads.hidden = true;
-      cleanupWS();
-      loadHistory();
+    if (msg.type === "error") {
+      statsEl.textContent = "錯誤：" + (msg.message || "unknown");
+      statsEl.style.color = "var(--red)";
+      finishCard(jobId, false);
     }
   };
 
-  ws.onclose = () => cleanupWS();
+  ws.onclose = () => {
+    state.ws = null;
+  };
 }
 
-function cleanupWS(){
-  try { ws && ws.close(); } catch {}
-  ws = null;
-  currentJobId = null;
-}
+function finishCard(jobId, success) {
+  const state = activeJobs.get(jobId);
+  if (!state) return;
 
-file.onchange = () => {
-  const f = file.files[0];
-  if (!f) return;
-  filenameEl.textContent = f.name;
-  filenameEl.title = f.name;
-};
-
-startBtn.onclick = async () => {
-  const f = file.files[0];
-  if (!f) return alert("請選檔案");
-
-  // reset UI
-  output.textContent = "";
-  stats.textContent = "上傳中…";
-  bar.style.width = "0%";
-  downloads.hidden = true;
-
-  startBtn.disabled = true;
-  pauseBtn.disabled = false;
-
-  const fd = new FormData();
-  fd.append("file", f);
-  fd.append("traditional", traditional.checked);
-
-  const res = await fetch("/upload", { method: "POST", body: fd });
-  const { job_id } = await res.json();
-
-  currentJobId = job_id;
-  txt.href = `/download/${job_id}.txt`;
-  srt.href = `/download/${job_id}.srt`;
-
-  connectWS(job_id);
-};
-
-pauseBtn.onclick = async () => {
-  if (!currentJobId) return;
+  const { wrap, pauseBtn } = state;
   pauseBtn.disabled = true;
-  stats.textContent = "取消中…（釋放GPU）";
-  await fetch(`/job/${currentJobId}/pause`, { method: "POST" });
-  // 後端會透過 ws 回 paused；若 ws 已斷，history 也看得到狀態
-};
+  pauseBtn.hidden = true;
 
-async function resumeJob(oldJobId){
-  // 重新跑（產生新 job_id）
-  const res = await fetch(`/job/${oldJobId}/resume`, { method: "POST" });
-  const { job_id } = await res.json();
-
-  // UI 直接切到新 job 觀看
-  output.textContent = "";
-  downloads.hidden = true;
-  bar.style.width = "0%";
-  stats.textContent = "重跑開始…";
-  startBtn.disabled = true;
-  pauseBtn.disabled = false;
-
-  currentJobId = job_id;
-  txt.href = `/download/${job_id}.txt`;
-  srt.href = `/download/${job_id}.srt`;
-
-  connectWS(job_id);
+  // Move to history after a short delay
+  setTimeout(() => {
+    wrap.remove();
+    activeJobs.delete(jobId);
+    if (activeJobsEl.children.length === 0) activeSection.hidden = true;
+    loadHistory();
+  }, 2000);
 }
 
-async function loadHistory(){
+// ─── history ──────────────────────────────────────────────────────────────────
+async function loadHistory() {
   const jobs = await fetch("/jobs").then(r => r.json());
-  if (!jobs.length){
-    history.textContent = "沒有紀錄";
+  if (!jobs.length) {
+    historyEl.textContent = "沒有紀錄";
+    batchDownloadBtn.disabled = true;
     return;
   }
 
-  history.innerHTML = "";
-  for (const j of jobs){
-    const item = document.createElement("div");
-    item.className = "item";
+  historyEl.innerHTML = "";
+  const doneJobs = jobs.filter(j => j.status === "done");
+  batchDownloadBtn.disabled = doneJobs.length === 0;
 
-    const left = document.createElement("div");
-    left.className = "left";
+  for (const j of jobs) {
+    const card = document.createElement("div");
+    card.className = "job-card";
 
-    const name = document.createElement("div");
-    name.className = "name";
-    name.textContent = j.filename || "(unknown)";
-    name.title = j.filename || "";
+    const isDone = j.status === "done";
+    const wall   = j.wall_total ?? null;
+    const avg    = j.avg_speed  ?? null;
+    const gpu    = j.gpu_name ?? (j.gpu_id != null ? `GPU ${j.gpu_id}` : "—");
 
-    const meta = document.createElement("div");
-    meta.className = "meta";
+    const checkboxHtml = isDone
+      ? `<input type="checkbox" class="jc-check batch-chk" data-job-id="${j.job_id}" />`
+      : `<span style="width:16px;display:inline-block"></span>`;
 
-    const wall = (j.wall_total ?? null);
-    const avg = (j.avg_speed ?? null);
-    const gpu = (j.gpu_name ?? (j.gpu_id !== null && j.gpu_id !== undefined ? `GPU ${j.gpu_id}` : "—"));
+    const txtClass = isDone ? "" : "disabled";
+    const srtClass = isDone ? "" : "disabled";
 
-    meta.textContent =
-      `狀態: ${j.status}`
-      + ` • 上傳: ${fmtTime(j.created_at)}`
-      + ` • 耗時: ${fmtSec(wall)}`
-      + ` • 平均: x${avg === null || avg === undefined ? "—" : Number(avg).toFixed(2)}`
-      + ` • GPU: ${gpu}`;
+    card.innerHTML = `
+      <div class="jc-top">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
+          ${checkboxHtml}
+          <div class="jc-name" title="${j.filename || ''}">${j.filename || '(unknown)'}</div>
+        </div>
+        <div class="jc-actions">
+          <a href="/download/${j.job_id}.txt" class="${txtClass}" target="_blank">TXT</a>
+          <a href="/download/${j.job_id}.srt" class="${srtClass}" target="_blank">SRT</a>
+          <button class="rerun">重跑</button>
+          <button class="del">刪除</button>
+        </div>
+      </div>
+      <div class="jc-meta">
+        狀態: ${j.status}
+        • 上傳: ${fmtTime(j.created_at)}
+        • 耗時: ${fmtSec(wall)}
+        • 平均: x${avg === null ? "—" : Number(avg).toFixed(2)}
+        • GPU: ${gpu}
+      </div>
+    `;
 
-    left.appendChild(name);
-    left.appendChild(meta);
-
-    const right = document.createElement("div");
-    right.className = "right";
-
-    const aTxt = document.createElement("a");
-    aTxt.href = `/download/${j.job_id}.txt`;
-    aTxt.textContent = "TXT";
-    aTxt.target = "_blank";
-
-    const aSrt = document.createElement("a");
-    aSrt.href = `/download/${j.job_id}.srt`;
-    aSrt.textContent = "SRT";
-    aSrt.target = "_blank";
-
-    // 只有 done 才一定有檔；paused/error 可能沒有
-    if (j.status !== "done"){
-      aTxt.style.opacity = "0.35";
-      aSrt.style.opacity = "0.35";
-      aTxt.style.pointerEvents = "none";
-      aSrt.style.pointerEvents = "none";
-    }
-
-    const rerun = document.createElement("button");
-    rerun.className = "rerun";
-    rerun.textContent = "重跑";
-    rerun.onclick = () => resumeJob(j.job_id);
-
-    const del = document.createElement("button");
-    del.className = "del";
-    del.textContent = "刪除";
-    del.onclick = async () => {
+    card.querySelector(".rerun").addEventListener("click", () => resumeJob(j.job_id));
+    card.querySelector(".del").addEventListener("click", async () => {
       if (!confirm("確定刪除？")) return;
       await fetch(`/job/${j.job_id}`, { method: "DELETE" });
-      await loadHistory();
-    };
+      loadHistory();
+    });
 
-    right.appendChild(aTxt);
-    right.appendChild(aSrt);
-    right.appendChild(rerun);
-    right.appendChild(del);
-
-    item.appendChild(left);
-    item.appendChild(right);
-
-    history.appendChild(item);
+    historyEl.appendChild(card);
   }
+
+  // Update batch download button based on checked items (or all done if none checked)
+  updateBatchBtn();
 }
 
-refreshBtn.onclick = loadHistory;
-loadHistory();
+function updateBatchBtn() {
+  const checked = getCheckedIds();
+  const doneCount = historyEl.querySelectorAll(".batch-chk").length;
+  batchDownloadBtn.disabled = doneCount === 0;
+  batchDownloadBtn.textContent = checked.length > 0
+    ? `批次下載 ZIP (${checked.length})`
+    : `批次下載 ZIP`;
+}
 
+function getCheckedIds() {
+  return Array.from(historyEl.querySelectorAll(".batch-chk:checked"))
+    .map(el => el.dataset.jobId);
+}
+
+historyEl.addEventListener("change", (e) => {
+  if (e.target.classList.contains("batch-chk")) updateBatchBtn();
+});
+
+batchDownloadBtn.addEventListener("click", () => {
+  let ids = getCheckedIds();
+  // If nothing checked, download all done jobs
+  if (!ids.length) {
+    ids = Array.from(historyEl.querySelectorAll(".batch-chk"))
+      .map(el => el.dataset.jobId);
+  }
+  if (!ids.length) return;
+  window.location.href = `/download-batch?job_ids=${ids.join(",")}`;
+});
+
+// ─── resume ───────────────────────────────────────────────────────────────────
+async function resumeJob(oldJobId) {
+  const res = await fetch(`/job/${oldJobId}/resume`, { method: "POST" });
+  const { job_id } = await res.json();
+
+  // Find original filename from history card
+  const oldCard = Array.from(historyEl.querySelectorAll(".job-card"))
+    .find(c => c.querySelector(`[data-job-id="${oldJobId}"]`));
+  const name = oldCard?.querySelector(".jc-name")?.textContent || "重跑";
+
+  createActiveCard(job_id, name, "重跑開始…");
+  connectWS(job_id, null);
+}
+
+// ─── init ─────────────────────────────────────────────────────────────────────
+refreshBtn.addEventListener("click", loadHistory);
+loadHistory();
