@@ -1,6 +1,7 @@
-import sys
 import json
-from worker import WhisperRunner, JobCancelled
+import sys
+
+from worker import JobCancelled, WhisperRunner
 
 
 def main():
@@ -25,8 +26,8 @@ def main():
         print(json.dumps(msg, ensure_ascii=False), flush=True)
 
     def is_cancelled():
-        # subprocess 版的取消靠 parent 發 SIGTERM/SIGKILL，
-        # 不靠 shared flag，所以這裡永遠 False。
+        # subprocess 版的取消靠 parent 發 SIGTERM/SIGKILL,
+        # 不靠 shared flag, 所以這裡永遠 False。
         return False
 
     try:
@@ -48,4 +49,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

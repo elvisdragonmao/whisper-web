@@ -1,16 +1,17 @@
+import asyncio
+import contextlib
 import io
+import json
 import os
 import re
-import json
+import subprocess
+import threading
 import time
 import uuid
 import zipfile
-import asyncio
-import threading
-import subprocess
-from typing import Dict, Any, Optional, List
+from typing import Any
 
-from fastapi import FastAPI, UploadFile, Form, WebSocket, HTTPException
+from fastapi import FastAPI, Form, HTTPException, UploadFile, WebSocket
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -26,19 +27,22 @@ app = FastAPI()
 
 # ---------- persistence ----------
 
-def load_jobs() -> List[Dict[str, Any]]:
+
+def load_jobs() -> list[dict[str, Any]]:
     if not os.path.exists(JOBS_DB):
         return []
-    with open(JOBS_DB, "r", encoding="utf-8") as f:
+    with open(JOBS_DB, encoding="utf-8") as f:
         return json.load(f)
 
-def save_jobs(jobs: List[Dict[str, Any]]) -> None:
+
+def save_jobs(jobs: list[dict[str, Any]]) -> None:
     tmp = JOBS_DB + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(jobs, f, ensure_ascii=False, indent=2)
     os.replace(tmp, JOBS_DB)
 
-def upsert_job(rec: Dict[str, Any]) -> None:
+
+def upsert_job(rec: dict[str, Any]) -> None:
     jobs = load_jobs()
     for i, j in enumerate(jobs):
         if j["job_id"] == rec["job_id"]:
@@ -48,15 +52,18 @@ def upsert_job(rec: Dict[str, Any]) -> None:
     jobs.insert(0, rec)
     save_jobs(jobs)
 
-def get_job(job_id: str) -> Optional[Dict[str, Any]]:
+
+def get_job(job_id: str) -> dict[str, Any] | None:
     for j in load_jobs():
         if j["job_id"] == job_id:
             return j
     return None
 
+
 # ---------- GPU detect / names ----------
 
-def detect_gpus() -> List[int]:
+
+def detect_gpus() -> list[int]:
     try:
         out = subprocess.check_output(["nvidia-smi", "-L"]).decode()
         ids = re.findall(r"GPU (\d+):", out)
@@ -64,22 +71,28 @@ def detect_gpus() -> List[int]:
     except Exception:
         return [0]
 
-def gpu_names() -> Dict[int, str]:
+
+def gpu_names() -> dict[int, str]:
     try:
-        out = subprocess.check_output(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"]
-        ).decode().strip().splitlines()
+        out = (
+            subprocess.check_output(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+            .decode()
+            .strip()
+            .splitlines()
+        )
         return {i: name.strip() for i, name in enumerate(out)}
     except Exception:
         return {0: "GPU 0"}
 
+
 GPU_POOL = detect_gpus()
 GPU_NAMES = gpu_names()
 
-GPU_BUSY: Dict[int, bool] = {g: False for g in GPU_POOL}
+GPU_BUSY: dict[int, bool] = dict.fromkeys(GPU_POOL, False)
 GPU_LOCK = threading.Lock()
 
-def acquire_gpu() -> Optional[int]:
+
+def acquire_gpu() -> int | None:
     with GPU_LOCK:
         for g in GPU_POOL:
             if not GPU_BUSY[g]:
@@ -87,21 +100,24 @@ def acquire_gpu() -> Optional[int]:
                 return g
     return None
 
+
 def release_gpu(gpu_id: int) -> None:
     with GPU_LOCK:
         if gpu_id in GPU_BUSY:
             GPU_BUSY[gpu_id] = False
 
+
 # ---------- runtime state ----------
+
 
 class RuntimeJob:
     def __init__(self, job_id: str):
         self.job_id = job_id
-        self.queue: "asyncio.Queue[Dict[str, Any]]" = asyncio.Queue()
-        self.ws: Optional[WebSocket] = None
+        self.queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self.ws: WebSocket | None = None
 
-        self.gpu_id: Optional[int] = None
-        self.proc: Optional[subprocess.Popen] = None
+        self.gpu_id: int | None = None
+        self.proc: subprocess.Popen | None = None
 
         self.pause_requested = False
         self.pause_lock = threading.Lock()
@@ -114,30 +130,36 @@ class RuntimeJob:
         with self.pause_lock:
             return self.pause_requested
 
-RUNTIME: Dict[str, RuntimeJob] = {}
+
+RUNTIME: dict[str, RuntimeJob] = {}
 RUNTIME_LOCK = threading.Lock()
 
 # ---------- frontend ----------
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    with open("static/index.html", "r", encoding="utf-8") as f:
+    with open("static/index.html", encoding="utf-8") as f:
         return f.read()
 
+
 # ---------- APIs ----------
+
 
 @app.get("/jobs")
 def list_jobs():
     return load_jobs()
 
+
 @app.get("/gpus")
 def gpus():
     return {
         "gpus": [{"id": g, "name": GPU_NAMES.get(g, f"GPU {g}")} for g in GPU_POOL],
-        "busy": GPU_BUSY
+        "busy": GPU_BUSY,
     }
+
 
 @app.get("/download/{job_id}.{ext}")
 def download(job_id: str, ext: str):
@@ -153,6 +175,7 @@ def download(job_id: str, ext: str):
     dl_name = f"{base}.{ext}"
     return FileResponse(path, filename=dl_name)
 
+
 @app.get("/download-batch")
 def download_batch(job_ids: str):
     """
@@ -164,7 +187,7 @@ def download_batch(job_ids: str):
         raise HTTPException(400, "no job_ids provided")
 
     buf = io.BytesIO()
-    seen: Dict[str, int] = {}
+    seen: dict[str, int] = {}
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for job_id in ids:
             job = get_job(job_id)
@@ -195,6 +218,7 @@ def download_batch(job_ids: str):
         headers={"Content-Disposition": "attachment; filename=transcripts.zip"},
     )
 
+
 @app.delete("/job/{job_id}")
 def delete_job(job_id: str):
     for ext in ("txt", "srt"):
@@ -204,10 +228,8 @@ def delete_job(job_id: str):
 
     for fn in os.listdir(UPLOADS_DIR):
         if fn.startswith(job_id + "_") or fn == f"{job_id}.wav":
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(f"{UPLOADS_DIR}/{fn}")
-            except:
-                pass
 
     jobs = [j for j in load_jobs() if j["job_id"] != job_id]
     save_jobs(jobs)
@@ -217,15 +239,15 @@ def delete_job(job_id: str):
         if rj:
             rj.request_pause()
             if rj.proc and rj.proc.poll() is None:
-                try:
+                with contextlib.suppress(OSError):
                     rj.proc.terminate()
-                except:
-                    pass
             del RUNTIME[job_id]
 
     return {"ok": True}
 
+
 # ---- Solution 2: Pause = terminate subprocess (release GPU after exit), Resume = rerun (new job_id)
+
 
 @app.post("/job/{job_id}/pause")
 def pause(job_id: str):
@@ -234,11 +256,10 @@ def pause(job_id: str):
         raise HTTPException(404, "job not running")
     rj.request_pause()
     if rj.proc and rj.proc.poll() is None:
-        try:
+        with contextlib.suppress(Exception):
             rj.proc.terminate()
-        except Exception:
-            pass
     return {"ok": True}
+
 
 @app.post("/job/{job_id}/resume")
 async def resume(job_id: str):
@@ -264,6 +285,7 @@ async def resume(job_id: str):
         os.link(src, new_src)
     except Exception:
         import shutil
+
         shutil.copy2(src, new_src)
 
     rec = {
@@ -287,9 +309,12 @@ async def resume(job_id: str):
     with RUNTIME_LOCK:
         RUNTIME[new_job_id] = rj
 
-    asyncio.create_task(_run_job(new_job_id, new_src, rec["filename"], rec["traditional"]))
+    # Store task reference to prevent it from being garbage-collected
+    task = asyncio.create_task(_run_job(new_job_id, new_src, rec["filename"], rec["traditional"]))
+    task.add_done_callback(lambda _: None)
 
     return {"job_id": new_job_id}
+
 
 @app.post("/upload")
 async def upload(
@@ -322,8 +347,11 @@ async def upload(
     with RUNTIME_LOCK:
         RUNTIME[job_id] = rj
 
-    asyncio.create_task(_run_job(job_id, src_path, file.filename, bool(traditional)))
+    # Store task reference to prevent it from being garbage-collected
+    task = asyncio.create_task(_run_job(job_id, src_path, file.filename, bool(traditional)))
+    task.add_done_callback(lambda _: None)
     return {"job_id": job_id}
+
 
 @app.websocket("/ws/{job_id}")
 async def ws(job_id: str, ws: WebSocket):
@@ -343,13 +371,13 @@ async def ws(job_id: str, ws: WebSocket):
             if msg.get("type") in ("done", "error", "paused"):
                 break
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await ws.close()
-        except:
-            pass
         rj.ws = None
 
+
 # ---------- runner ----------
+
 
 async def _run_job(job_id: str, src_path: str, filename: str, traditional: bool):
     rj = RUNTIME[job_id]
@@ -365,31 +393,32 @@ async def _run_job(job_id: str, src_path: str, filename: str, traditional: bool)
 
     started_at = int(time.time())
     rec = get_job(job_id) or {}
-    rec.update({
-        "job_id": job_id,
-        "filename": filename,
-        "traditional": traditional,
-        "status": "processing",
-        "created_at": rec.get("created_at") or int(time.time()),
-        "started_at": started_at,
-        "gpu_id": gpu_id,
-        "gpu_name": gpu_name,
-    })
+    rec.update(
+        {
+            "job_id": job_id,
+            "filename": filename,
+            "traditional": traditional,
+            "status": "processing",
+            "created_at": rec.get("created_at") or int(time.time()),
+            "started_at": started_at,
+            "gpu_id": gpu_id,
+            "gpu_name": gpu_name,
+        }
+    )
     upsert_job(rec)
 
     loop = asyncio.get_running_loop()
 
-    def push(msg: Dict[str, Any]):
+    def push(msg: dict[str, Any]):
         def _put():
-            try:
+            with contextlib.suppress(Exception):
                 rj.queue.put_nowait(msg)
-            except Exception:
-                pass
+
         loop.call_soon_threadsafe(_put)
 
     status = "error"
-    err_msg: Optional[str] = None
-    stats: Optional[Dict[str, Any]] = None
+    err_msg: str | None = None
+    stats: dict[str, Any] | None = None
 
     def run_subprocess():
         nonlocal status, err_msg, stats
@@ -399,7 +428,8 @@ async def _run_job(job_id: str, src_path: str, filename: str, traditional: bool)
         env["PYTHONUNBUFFERED"] = "1"
 
         cmd = [
-            "python3", "whisper_worker_entry.py",
+            "python3",
+            "whisper_worker_entry.py",
             src_path,
             job_id,
             UPLOADS_DIR,
@@ -428,7 +458,7 @@ async def _run_job(job_id: str, src_path: str, filename: str, traditional: bool)
                 except Exception:
                     continue
 
-                # segment 直接轉送
+                # segment -- 直接轉送
                 if msg.get("type") == "segment":
                     push(msg)
                 elif msg.get("type") == "done":
@@ -442,21 +472,21 @@ async def _run_job(job_id: str, src_path: str, filename: str, traditional: bool)
 
             rc = proc.wait()
 
-            # 如果是 pause 觸發 terminate，通常會走到這裡 rc != 0
+            # 如果是 pause 觸發 terminate, 通常會走到這裡 rc != 0
             if rj.is_pause_requested():
                 status = "paused"
 
-            # 若什麼都沒收到，依 rc 判斷
+            # 若什麼都沒收到, 依 rc 判斷
             if status not in ("done", "paused", "error"):
                 status = "error" if rc != 0 else "done"
 
             if status == "error" and not err_msg:
-                # 把 stderr 摘一點出來
-                try:
+                # 摘一點 stderr 出來
+                with contextlib.suppress(Exception):
                     assert proc.stderr is not None
                     err = proc.stderr.read()
                     err_msg = err[-2000:] if err else "unknown"
-                except Exception:
+                if not err_msg:
                     err_msg = "unknown"
 
         finally:
@@ -466,45 +496,45 @@ async def _run_job(job_id: str, src_path: str, filename: str, traditional: bool)
 
     ended_at = int(time.time())
 
-    # 釋放 GPU（最關鍵）
+    # 釋放 GPU (最關鍵)
     release_gpu(gpu_id)
 
-    # paused：清掉可能的輸出，避免誤判為 done
+    # paused: 清掉可能的輸出, 避免誤判為 done
     if status == "paused":
         for ext in ("txt", "srt"):
             p = f"{OUTPUTS_DIR}/{job_id}.{ext}"
             if os.path.exists(p):
-                try:
+                with contextlib.suppress(OSError):
                     os.remove(p)
-                except:
-                    pass
         push({"type": "paused"})
     elif status == "error":
         push({"type": "error", "message": err_msg or "unknown"})
     else:
         push({"type": "done"})
 
-    # 寫歷史：耗時 + 平均倍速 + audio_total + gpu_name
+    # 寫歷史: 耗時 + 平均倍速 + audio_total + gpu_name
     wall_total = float(ended_at - started_at) if started_at else None
 
     rec = get_job(job_id) or {}
-    rec.update({
-        "status": status,
-        "ended_at": ended_at,
-        "wall_total": wall_total,
-        "gpu_id": gpu_id,
-        "gpu_name": gpu_name,
-    })
+    rec.update(
+        {
+            "status": status,
+            "ended_at": ended_at,
+            "wall_total": wall_total,
+            "gpu_id": gpu_id,
+            "gpu_name": gpu_name,
+        }
+    )
     if stats:
-        rec.update({
-            "audio_total": stats.get("audio_total"),
-            "avg_speed": stats.get("avg_speed"),
-            "wall_total": stats.get("wall_total") or wall_total,
-        })
+        rec.update(
+            {
+                "audio_total": stats.get("audio_total"),
+                "avg_speed": stats.get("avg_speed"),
+                "wall_total": stats.get("wall_total") or wall_total,
+            }
+        )
 
     upsert_job(rec)
 
     with RUNTIME_LOCK:
-        if job_id in RUNTIME:
-            del RUNTIME[job_id]
-
+        RUNTIME.pop(job_id, None)

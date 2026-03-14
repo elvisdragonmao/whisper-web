@@ -1,7 +1,8 @@
 import os
-import time
 import subprocess
-from typing import Callable, Dict, Any, List
+import time
+from collections.abc import Callable
+from typing import Any
 
 from faster_whisper import WhisperModel
 from opencc import OpenCC
@@ -13,10 +14,14 @@ class JobCancelled(Exception):
 
 def ffprobe_duration(path: str) -> float:
     cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        path
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
     ]
     out = subprocess.check_output(cmd).decode().strip()
     return float(out)
@@ -24,20 +29,18 @@ def ffprobe_duration(path: str) -> float:
 
 def ensure_wav_16k_mono(src_path: str, dst_wav_path: str) -> str:
     """
-    任何輸入（影片/音訊）都轉成 16k mono wav，最穩。
+    任何輸入 (影片/音訊) 都轉成 16k mono wav, 最穩。
     """
-    cmd = [
-        "ffmpeg", "-y", "-i", src_path,
-        "-ac", "1", "-ar", "16000",
-        "-vn",
-        dst_wav_path
-    ]
+    cmd = ["ffmpeg", "-y", "-i", src_path, "-ac", "1", "-ar", "16000", "-vn", dst_wav_path]
     subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return dst_wav_path
 
 
 def srt_time(sec: float) -> str:
-    ms = int((sec % 1) * 1000)
+    ms = round((sec % 1) * 1000)
+    if ms >= 1000:
+        sec += 1
+        ms -= 1000
     h = int(sec // 3600)
     m = int((sec % 3600) // 60)
     s = int(sec % 60)
@@ -46,12 +49,13 @@ def srt_time(sec: float) -> str:
 
 class WhisperRunner:
     """
-    ⚠️ 這個 runner 不再碰 CUDA_VISIBLE_DEVICES！
+    這個 runner 不再碰 CUDA_VISIBLE_DEVICES!
     GPU 的選擇由「啟動 subprocess 的那一層」用環境變數控制。
 
-    在 subprocess 裡，CUDA_VISIBLE_DEVICES 通常會只暴露 1 張卡，
+    在 subprocess 裡, CUDA_VISIBLE_DEVICES 通常會只暴露 1 張卡,
     所以這裡 device_index 用 0 就好。
     """
+
     def __init__(self, model_name: str = "large-v3-turbo", compute_type: str = "float16"):
         self.model = WhisperModel(
             model_name,
@@ -68,15 +72,15 @@ class WhisperRunner:
         to_traditional: bool,
         uploads_dir: str,
         outputs_dir: str,
-        on_event: Callable[[Dict[str, Any]], None],
+        on_event: Callable[[dict[str, Any]], None],
         is_cancelled: Callable[[], bool],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
-        寫出：
+        寫出:
           outputs/{job_id}.txt
           outputs/{job_id}.srt
 
-        回傳統計：
+        回傳統計:
           audio_total, wall_total, avg_speed
         """
         wav_path = os.path.join(uploads_dir, f"{job_id}.wav")
@@ -93,8 +97,8 @@ class WhisperRunner:
             vad_filter=True,
         )
 
-        txt_lines: List[str] = []
-        srt_blocks: List[str] = []
+        txt_lines: list[str] = []
+        srt_blocks: list[str] = []
         idx = 1
         processed_audio = 0.0
 
@@ -106,14 +110,12 @@ class WhisperRunner:
             if to_traditional:
                 text = self.cc.convert(text)
 
-            # TXT：每段一行
+            # TXT: 每段一行
             txt_lines.append(text)
 
             # SRT
             srt_blocks.append(
-                f"{idx}\n"
-                f"{srt_time(float(seg.start))} --> {srt_time(float(seg.end))}\n"
-                f"{text}\n"
+                f"{idx}\n{srt_time(float(seg.start))} --> {srt_time(float(seg.end))}\n{text}\n"
             )
             idx += 1
 
@@ -122,17 +124,19 @@ class WhisperRunner:
             speed = processed_audio / wall_elapsed if wall_elapsed > 0 else 0.0
             percent = (processed_audio / audio_total * 100.0) if audio_total > 0 else 0.0
 
-            on_event({
-                "type": "segment",
-                "start": float(seg.start),
-                "end": float(seg.end),
-                "text": text,
-                "audio_total": float(audio_total),
-                "processed_audio": float(processed_audio),
-                "wall_elapsed": float(wall_elapsed),
-                "percent": float(percent),
-                "speed": float(speed),
-            })
+            on_event(
+                {
+                    "type": "segment",
+                    "start": float(seg.start),
+                    "end": float(seg.end),
+                    "text": text,
+                    "audio_total": float(audio_total),
+                    "processed_audio": float(processed_audio),
+                    "wall_elapsed": float(wall_elapsed),
+                    "percent": float(percent),
+                    "speed": float(speed),
+                }
+            )
 
         wall_total = time.time() - start_wall
         avg_speed = (audio_total / wall_total) if wall_total > 0 else 0.0
@@ -151,4 +155,3 @@ class WhisperRunner:
             "wall_total": float(wall_total),
             "avg_speed": float(avg_speed),
         }
-
