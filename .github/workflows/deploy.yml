@@ -36,11 +36,21 @@ jobs:
     needs: lint
 
     env:
-      DEPLOY_USER: ${{ vars.DEPLOY_USER }}
-      DEPLOY_HOST: ${{ vars.DEPLOY_HOST }}
-      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
 
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify deploy variables
+        run: |
+          test -n "$DEPLOY_USER"
+          test -n "$DEPLOY_HOST"
+          test -n "$DEPLOY_PATH"
+          echo "DEPLOY_HOST=$DEPLOY_HOST"
+          echo "DEPLOY_PATH=$DEPLOY_PATH"
+
       - name: Install WireGuard
         run: |
           sudo apt-get update
@@ -71,11 +81,13 @@ jobs:
 
       - name: Run deploy script
         run: |
-          ssh -i ~/.ssh/id_ed25519 \
+          ssh \
+            -i ~/.ssh/id_ed25519 \
             -o IdentitiesOnly=yes \
             -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
             "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cd ${DEPLOY_PATH} && ./deploy.sh"
+            "cd '${DEPLOY_PATH}' && ./deploy.sh"
 
       - name: Tear down WireGuard
         if: always()
