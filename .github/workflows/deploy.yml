@@ -32,7 +32,7 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    requires: lint
+    needs: lint
 
     env:
       DEPLOY_USER: ${{ vars.DEPLOY_USER }}
