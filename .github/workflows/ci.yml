@@ -14,11 +14,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Ruff
-        run: uv pip install --system ruff
-
       - name: Ruff lint
-        run: ruff check app/
+        run: uvx ruff check app/
 
       - name: Ruff format check
-        run: ruff format --check app/
+        run: uvx ruff format --check app/
