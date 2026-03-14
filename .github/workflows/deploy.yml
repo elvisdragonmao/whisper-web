@@ -81,6 +81,15 @@ jobs:
           ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           EOF
 
+      - name: Debug VPN reachability
+        run: |
+          echo "DEPLOY_HOST=$DEPLOY_HOST"
+          ip addr show wg0
+          ip route
+          sudo wg show
+          ping -c 3 "$DEPLOY_HOST" || true
+          nc -vz -w 5 "$DEPLOY_HOST" 22 || true
+
       - name: Run deploy script
         run: |
           ssh \
