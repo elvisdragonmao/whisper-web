@@ -1,0 +1,81 @@
+name: Deploy over WireGuard
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint & Format (Ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ruff
+        run: uv pip install --system ruff
+
+      - name: Ruff lint
+        run: ruff check app/
+
+      - name: Ruff format check
+        run: ruff format --check app/
+
+  deploy:
+    runs-on: ubuntu-latest
+    requires: lint
+
+    env:
+      DEPLOY_SSH_USER: ${{ vars.DEPLOY_SSH_USER }}
+      DEPLOY_SSH_HOST: ${{ vars.DEPLOY_SSH_HOST }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH }}
+
+    steps:
+      - name: Install WireGuard
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y wireguard
+
+      - name: Write WireGuard config
+        run: |
+          umask 077
+          cat > wg0.conf <<'EOF'
+          ${{ secrets.WIREGUARD_CONFIG }}
+          EOF
+
+      - name: Bring up WireGuard
+        run: |
+          sudo wg-quick up ./wg0.conf
+          sudo wg show
+
+      - name: Prepare SSH key and known_hosts
+        run: |
+          install -d -m 700 ~/.ssh
+          umask 077
+          cat > ~/.ssh/id_ed25519 <<'EOF'
+          ${{ secrets.DEPLOY_SSH_KEY }}
+          EOF
+          cat > ~/.ssh/known_hosts <<'EOF'
+          ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+          EOF
+
+      - name: Run deploy script
+        run: |
+          ssh -i ~/.ssh/id_ed25519 \
+            -o IdentitiesOnly=yes \
+            -o BatchMode=yes \
+            "${DEPLOY_SSH_USER}@${DEPLOY_SSH_HOST}" \
+            "cd ${DEPLOY_PATH} && ./deploy.sh"
+
+      - name: Tear down WireGuard
+        if: always()
+        run: sudo wg-quick down ./wg0.conf
