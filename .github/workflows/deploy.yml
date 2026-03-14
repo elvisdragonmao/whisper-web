@@ -17,18 +17,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
-      - name: Install Ruff
-        run: uv pip install --system ruff
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
 
       - name: Ruff lint
-        run: ruff check app/
+        run: uvx ruff check app/
 
       - name: Ruff format check
-        run: ruff format --check app/
+        run: uvx ruff format --check app/
 
   deploy:
     runs-on: ubuntu-latest
